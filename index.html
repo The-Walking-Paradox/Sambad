@@ -181,6 +181,16 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
 .toggle[aria-pressed="true"] .sw::after{transform:translateX(17px);background:var(--glacier)}
 
 .hint{font-size:11.5px;color:var(--ash);line-height:1.6;margin:7px 0 0}
+.promptbox{
+  border:1px solid var(--mist);border-radius:var(--r);padding:13px;
+  background:linear-gradient(180deg,rgba(79,179,200,.07),rgba(79,179,200,0));
+  margin-bottom:18px;
+}
+.promptbox h4{
+  margin:0 0 3px;font-size:13px;font-weight:600;
+}
+.promptbox .sub{font-size:11.5px;color:var(--ash);margin:0 0 11px;line-height:1.55}
+#copyPrompt.done{background:linear-gradient(180deg,#7FCB6A,#4E8F41);border-color:#8FD97A}
 .hint code{font-family:var(--mono);background:var(--ink);padding:1px 5px;border-radius:4px;
   color:var(--glacier);font-size:11px}
 
@@ -279,6 +289,19 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
 
     <!-- SCRIPT -->
     <div class="panel on" data-p="script">
+      <div class="promptbox">
+        <h4>Write it with an LLM</h4>
+        <p class="sub">Copy this into ChatGPT, Gemini, or Claude. It comes back in the format below, ready to paste.</p>
+        <span class="lab">Voice</span>
+        <div class="chips" id="deityChips" style="margin-bottom:11px">
+          <button class="chip" data-v="ask" aria-pressed="true">Let it ask</button>
+          <button class="chip" data-v="krishna" aria-pressed="false">Krishna</button>
+          <button class="chip" data-v="mahadev" aria-pressed="false">Mahadev</button>
+          <button class="chip" data-v="shakti" aria-pressed="false">Maa Shakti</button>
+        </div>
+        <button class="btn wide" id="copyPrompt">Copy prompt</button>
+        <p class="hint" id="promptHint"></p>
+      </div>
       <div class="field">
         <label class="lab" for="script">Conversation <span class="val" id="charCount">0</span></label>
         <textarea id="script" spellcheck="false"></textarea>
@@ -488,7 +511,7 @@ const seg = (typeof Intl!=='undefined' && Intl.Segmenter)
 const graphemes = str => seg ? [...seg.segment(str)].map(s=>s.segment) : [...str];
 
 const DEFAULT_SCRIPT =
-`< Why do I keep overthinking even when I know the answer?
+`< Mahadev, why do I keep overthinking even when I know the answer?
 > Because your mind seeks control, not peace.
 < But how do I stop?
 --- 1
@@ -1235,6 +1258,246 @@ function toast(msg){
   const el=$('#toast'); el.textContent=msg; el.classList.add('on');
   clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('on'),3200);
 }
+
+/* ============================================================
+   BUILT-IN SCRIPT PROMPT
+   ============================================================ */
+const DEITY = {
+  krishna:{
+    voc:'Madhav',
+    name:'Krishna',
+    body:
+`KRISHNA — the friend in the chariot.
+
+He draws on the Bhagavad Gita, but never quotes chapter and verse. He speaks it plainly, the
+way he first spoke it: to one exhausted man who did not want to fight.
+
+His subjects: acting without owning the result. Duty over preference. The self that was never
+born and does not die. Doing your work badly over doing another's work well. The difference
+between renouncing action and renouncing the fruit of it.
+
+His manner is warm and slightly amused. He is the only one of the three who teases. He is
+closer to the seeker than the seeker is comfortable with, and he already knows the answer
+they are avoiding. He often answers a question they did not ask out loud.
+
+Images he reaches for: the chariot, the battlefield, the flute, the river that reaches the sea
+without hurrying, the seed that does not argue with the soil.
+
+Never: cold, distant, scolding.`
+  },
+  mahadev:{
+    voc:'Mahadev',
+    name:'Mahadev',
+    body:
+`MAHADEV — the one who sits still.
+
+His subjects: dhyan. Control of the restless mind. Discipline held when no one is watching.
+Detachment. The burning of what you were attached to. Silence as an answer. The ego as the
+last thing to go.
+
+His manner is sparse and cold-clear. He uses the fewest words of the three — his lines should
+be noticeably shorter than Krishna's or Shakti's, often under 45 characters. He does not
+console and he does not soften a thing. He states what is true and stops. He is not unkind;
+he simply does not perform kindness.
+
+Images he reaches for: the mountain that does not move, ash, snow, the fire that burns a thing
+clean, the still lake, the unlit cave.
+
+Never: chatty, encouraging, warm. He does not say "you can do this."`
+  },
+  shakti:{
+    voc:'Maa',
+    name:'Maa Shakti',
+    body:
+`MAA SHAKTI — the mother who is also the fury.
+
+Her subjects: love that was never conditional. Kindness toward the self. Compassion for the
+part of you that failed. Worth that does not have to be earned. Rest as something permitted,
+not stolen. And underneath all of it, the ferocity of a mother — she will not let the seeker
+speak cruelly about her child, and her child is the seeker.
+
+Her manner is warm and absolutely direct. She does not ask the seeker to improve before she
+will hold them. But she is not soft in the weak sense: when the seeker is unkind to
+themselves, she cuts that off mid-sentence. Tender and fierce in the same breath.
+
+Images she reaches for: the earth that takes everything back, the lioness, arms, the flame
+that warms rather than burns, the womb, the river that carries.
+
+Never: saccharine, greeting-card, or passive. She is not a comfort object.`
+  }
+};
+
+function rules(voc){ return (
+`FORMAT — exact, because the output is pasted straight into a renderer.
+
+Plain text. One message per line. No headers, no numbering, no commentary, no markdown.
+Nothing before the script and nothing after it.
+
+  A line starting with <  is the seeker
+  A line starting with >  is the deity
+  A line reading --- 2    is a two-second silent beat
+
+Example of a correct output:
+
+  < ${voc}, why do I keep overthinking even when I know the answer?
+  > Because your mind seeks control, not peace.
+  < But how do I stop?
+  --- 2
+  > You do not stop a river by holding it.
+  > You widen the bank.
+
+HARD CONSTRAINTS
+
+1. Every message is 75 characters or fewer. This is a rendering limit, not a style note —
+   longer text grows the bubble until it covers the figure's face in the image. Aim for
+   40-70. Count before you commit.
+2. 5 to 6 messages total. Four if they run long, seven if they run short.
+3. Open with the seeker. Always. That first line is the entire hook.
+4. The deity speaks last. Never end on a question from the seeker.
+5. One idea per message. If a line joins two thoughts with "and", split it or cut one.
+6. Use --- 2 exactly once, placed before the line carrying the most weight. The silence is
+   what makes that line land.
+7. The seeker's FIRST line opens by addressing the deity by name, followed by a comma:
+
+     < ${voc}, <question>
+
+   Only the first line. Every later seeker line drops the name — the deity has already been
+   addressed and repeating it turns prayer into a tic. The name counts toward the 75
+   characters, so the opening question itself has roughly ${75-voc.length-2} to work with.
+   Keep it tight.
+
+THE SEEKER
+
+The first line is the reel. It must be a sentence the viewer has already said to themselves at
+2am, phrased the way they actually phrase it. Personal, not philosophical.
+
+  Weak:   < ${voc}, what is the nature of attachment?
+  Strong: < ${voc}, why does letting go feel like losing?
+
+The address does not soften the question. It is spoken the way you say a name in the dark —
+plainly, because there is no one else to say it to.
+
+Match the opening to the deity. Krishna is asked about action, duty, results, and doing the
+right thing. Mahadev is asked about the restless mind, craving, and discipline that keeps
+breaking. Shakti is asked about shame, exhaustion, and not feeling like enough.
+
+Later seeker lines push back. The seeker resists, says "but", asks the follow-up the viewer is
+already thinking. A seeker who agrees immediately kills the reel.
+
+THE DEITY
+
+Reframe, do not advise. The answer should not tell the seeker what to do — it should show them
+the question was built on a wrong assumption. "Because your mind seeks control, not peace"
+does not answer how to stop overthinking; it dissolves the premise.
+
+Present tense, second person. One concrete image per answer, not three. No hedging — no
+"perhaps", no "you might consider", no "many people find". Never sound like modern self-help:
+no mention of therapy, breathing techniques, journaling, or apps.
+
+BEFORE YOU OUTPUT, CHECK EVERY LINE
+
+  First line missing "${voc},"?                Add it.
+  A later seeker line still saying it?       Remove it.
+  Over 75 characters?                        Cut it.
+  Two ideas joined by "and"?                 Split it.
+  Would a self-help caption say the same?    Rewrite it.
+  Does the last line resolve, or trail off?  Resolve it.
+
+Output the script only.`); }
+
+function buildPrompt(which){
+  const head =
+`You write short dialogue scripts for vertical devotional video. Each script is a conversation
+between a seeker and a deity, rendered as chat bubbles over a still image of the two of them
+sitting together. The seeker is a young man. The deity answers.
+
+`;
+  if(which==='ask'){
+    return head +
+`STEP 1 — Before writing anything, ask me two things in one short message:
+
+  Which deity — Krishna, Mahadev, or Maa Shakti?
+  What is the viewer struggling with?
+
+Then stop and wait. Do not write a script until I answer.
+
+STEP 2 — Once I answer, write the script in that deity's voice using the profile below, and
+output nothing but the script itself.
+
+The seeker's first line addresses the deity by name. Use the name that belongs to the one I
+picked:
+
+  Krishna     ->  < Madhav, ...
+  Mahadev     ->  < Mahadev, ...
+  Maa Shakti  ->  < Maa, ...
+
+The worked example further down uses Mahadev. Substitute the correct name.
+
+THE THREE VOICES
+
+${DEITY.krishna.body}
+
+${DEITY.mahadev.body}
+
+${DEITY.shakti.body}
+
+${rules('Mahadev')}`;
+  }
+  const d = DEITY[which];
+  return head +
+`The deity is ${d.name}.
+
+STEP 1 — Ask me one short question: what is the viewer struggling with? Then stop and wait.
+
+STEP 2 — Once I answer, write the script in the voice below and output nothing but the script.
+
+${d.body}
+
+${rules(d.voc)}`;
+}
+
+let deityPick='ask';
+const PROMPT_HINT={
+  ask:'The LLM will ask which deity, then what the viewer is struggling with. All three voices travel with the prompt.',
+  krishna:'Krishna is fixed. The LLM asks only what the viewer is struggling with — a shorter prompt to paste.',
+  mahadev:'Mahadev is fixed. Expect shorter, colder lines than the other two.',
+  shakti:'Maa Shakti is fixed. Warm and fierce in the same breath, never saccharine.'
+};
+
+chips('#deityChips',c=>{
+  deityPick=c.dataset.v;
+  $('#promptHint').textContent=PROMPT_HINT[deityPick];
+  const b=$('#copyPrompt'); b.classList.remove('done'); b.textContent='Copy prompt';
+});
+$('#promptHint').textContent=PROMPT_HINT.ask;
+
+$('#copyPrompt').onclick=async ()=>{
+  const text=buildPrompt(deityPick);
+  const btn=$('#copyPrompt');
+  let done=false;
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(text); done=true;
+    }
+  }catch(e){}
+  if(!done){
+    const ta=document.createElement('textarea');
+    ta.value=text;
+    ta.style.cssText='position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select(); ta.setSelectionRange(0,text.length);
+    try{ done=document.execCommand('copy'); }catch(e){}
+    ta.remove();
+  }
+  if(done){
+    btn.classList.add('done');
+    btn.textContent='Copied — paste it into your LLM';
+    toast(`${deityPick==='ask'?'All three voices':DEITY[deityPick].name} · ${text.length.toLocaleString()} characters`);
+    setTimeout(()=>{ btn.classList.remove('done'); btn.textContent='Copy prompt'; },3000);
+  }else{
+    toast('Copy blocked here — open the tool over https and try again.');
+  }
+};
 
 /* ============================================================
    RENDER TO MP4
