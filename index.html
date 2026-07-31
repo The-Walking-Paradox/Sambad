@@ -355,9 +355,25 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
         <input type="range" id="bw" min="40" max="88" value="62">
       </div>
       <div class="field">
+        <span class="lab">Flow</span>
+        <div class="chips" id="flowChips">
+          <button class="chip" data-v="slots" aria-pressed="true">Slots</button>
+          <button class="chip" data-v="solo" aria-pressed="false">Solo</button>
+          <button class="chip" data-v="thread" aria-pressed="false">Thread</button>
+        </div>
+        <p class="hint" id="flowHint"></p>
+      </div>
+      <div class="field slotOnly">
+        <label class="lab" for="anchorL">Left bubble position <span class="val" id="anchorLV">16%</span></label>
+        <input type="range" id="anchorL" min="4" max="96" value="16">
+        <label class="lab" for="anchorR" style="margin-top:12px">Right bubble position <span class="val" id="anchorRV">70%</span></label>
+        <input type="range" id="anchorR" min="4" max="96" value="70">
+        <p class="hint">Drag on the preview to place a bubble — the side you touch is the side that moves. Above the halfway line a bubble grows downward, below it grows upward, so it never creeps over a face.</p>
+      </div>
+      <div class="field threadOnly" hidden>
         <label class="lab" for="anchor">Thread bottom <span class="val" id="anchorV">76%</span></label>
         <input type="range" id="anchor" min="30" max="95" value="76">
-        <p class="hint">Where the newest message sits. Drag directly on the preview to move the whole thread.</p>
+        <p class="hint">Where the newest message sits. Drag on the preview to move the whole thread.</p>
       </div>
       <div class="field">
         <label class="lab" for="scrim">Darken behind text <span class="val" id="scrimV">30%</span></label>
@@ -404,7 +420,7 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
         <label class="lab" for="hold">Hold on last frame <span class="val" id="holdV">1.5s</span></label>
         <input type="range" id="hold" min="0" max="60" value="15">
       </div>
-      <div class="field">
+      <div class="field threadOnly" hidden>
         <label class="lab" for="keep">Messages kept on screen <span class="val" id="keepV">no limit</span></label>
         <input type="range" id="keep" min="1" max="9" value="9">
         <p class="hint">Lower this to fade old messages out early and keep the frame breathing.</p>
@@ -490,10 +506,10 @@ const S = {
   bubbleStyle:'solid',
   font:"'JetBrains Mono',monospace",
   colL:'#2A2A2E', colR:'#2C4A76',
-  fsz:40, bwPct:62, anchorPct:76, scrim:30, drift:4,
+  fsz:40, bwPct:62, anchorPct:76, anchorL:16, anchorR:70, flow:'slots', scrim:30, drift:4,
   safe:true, tails:false,
   reveal:'type', dots:true,
-  pace:1, readMs:42, gapS:.28, endHold:1.5, keep:999,
+  pace:1, readMs:42, gapS:.28, endHold:1.5, keep:9,
   fps:30, mbps:10,
   audioBuf:null, audioName:'',
   t:0, playing:false, total:0
@@ -614,7 +630,7 @@ function stateAt(m,t){
 /* ============================================================
    LAYOUT + RENDER
    ============================================================ */
-const MORPH = 0.22, FADEIN = 0.16, FADEOUT = 0.40;
+const MORPH = 0.22, FADEIN = 0.16, FADEOUT = 0.40, EXIT = 0.34;
 
 function bubbleList(){ return S.msgs.filter(m=>m.side!=='P'); }
 
@@ -637,28 +653,54 @@ function layout(t){
     const popT = m.tDots>0 ? 1 : clamp((t-m.t0)/0.30,0,1);
     const sc = m.tDots>0 ? 1 : lerp(0.88,1,spring(popT));
 
-    // retire old messages once `keep` newer ones exist
-    const killer = bl[i+S.keep];
-    if(killer && t>=killer.t0) a *= 1-clamp((t-killer.t0)/FADEOUT,0,1);
+    // when does this bubble leave?
+    let ex = 0;
+    if(S.flow==='thread'){
+      const killer = bl[i+S.keep];
+      if(killer && t>=killer.t0) { ex = clamp((t-killer.t0)/FADEOUT,0,1); a *= 1-ex; ex = 0; }
+    }else{
+      // slots: replaced by the same speaker's next line. solo: by anyone's next line.
+      let succ = null;
+      for(let j=i+1;j<bl.length;j++){
+        if(S.flow==='solo' || bl[j].side===m.side){ succ = bl[j]; break; }
+      }
+      if(succ && t>=succ.t0){ ex = clamp((t-succ.t0)/EXIT,0,1); a *= 1-easeOut(ex); }
+    }
     if(a<=0.002) continue;
 
-    items.push({m,st,w,h,a,sc,morph,idx:i});
+    items.push({m,st,w,h,a,sc,morph,ex,idx:i,dy:0});
   }
-  // stack bottom-up from the anchor
-  const gapPx = Math.round(S.fsz*0.52);
-  let y = S.H*(S.anchorPct/100);
-  for(let i=items.length-1;i>=0;i--){
-    const it = items[i];
-    it.bottom = y; it.top = y - it.h;
-    y = it.top - gapPx;
-  }
-  // fade anything drifting off the top
-  const topLimit = S.H*0.055;
+
   const margin = Math.round(S.W*0.06);
-  for(const it of items){
-    if(it.top < topLimit) it.a *= clamp((it.bottom-topLimit)/(it.h*0.75+1),0,1);
-    it.x = it.m.side==='L' ? margin : S.W - margin - it.w;
+
+  if(S.flow==='thread'){
+    // stack bottom-up from the anchor
+    const gapPx = Math.round(S.fsz*0.52);
+    let y = S.H*(S.anchorPct/100);
+    for(let i=items.length-1;i>=0;i--){
+      const it = items[i];
+      it.bottom = y; it.top = y - it.h;
+      y = it.top - gapPx;
+    }
+    // fade anything drifting off the top
+    const topLimit = S.H*0.055;
+    for(const it of items){
+      if(it.top < topLimit) it.a *= clamp((it.bottom-topLimit)/(it.h*0.75+1),0,1);
+    }
+  }else{
+    // fixed slot per speaker — nothing travels through the frame
+    for(const it of items){
+      const pct = it.m.side==='L' ? S.anchorL : S.anchorR;
+      const y = S.H*(pct/100);
+      const growUp = pct > 50;
+      it.top = growUp ? y - it.h : y;
+      it.bottom = it.top + it.h;
+      // outgoing bubble drifts a little away from its anchor as it fades
+      it.dy = easeOut(it.ex) * S.fsz * (growUp ? -0.55 : 0.55);
+    }
   }
+
+  for(const it of items) it.x = it.m.side==='L' ? margin : S.W - margin - it.w;
   return items.filter(it=>it.a>0.002);
 }
 
@@ -834,6 +876,7 @@ function renderFrame(ctx,t,{guides=false}={}){
   for(const it of items){
     ctx.save();
     ctx.globalAlpha = it.a;
+    if(it.dy) ctx.translate(0,it.dy);
     if(it.sc!==1){
       const cx=it.x+it.w/2, cy=it.top+it.h/2;
       ctx.translate(cx,cy); ctx.scale(it.sc,it.sc); ctx.translate(-cx,-cy);
@@ -1009,8 +1052,16 @@ document.addEventListener('keydown',e=>{
   cv.addEventListener('pointermove',e=>{
     if(!down) return;
     const r=cv.getBoundingClientRect();
-    const pct = clamp(((e.clientY-r.top)/r.height)*100,30,95);
-    S.anchorPct=pct; $('#anchor').value=Math.round(pct); $('#anchorV').textContent=Math.round(pct)+'%';
+    const yPct = ((e.clientY-r.top)/r.height)*100;
+    if(S.flow==='thread'){
+      const v=clamp(yPct,30,95);
+      S.anchorPct=v; $('#anchor').value=Math.round(v); $('#anchorV').textContent=Math.round(v)+'%';
+    }else{
+      const v=clamp(yPct,4,96);
+      const left = (e.clientX-r.left)/r.width < 0.5;
+      if(left){ S.anchorL=v; $('#anchorL').value=Math.round(v); $('#anchorLV').textContent=Math.round(v)+'%'; }
+      else    { S.anchorR=v; $('#anchorR').value=Math.round(v); $('#anchorRV').textContent=Math.round(v)+'%'; }
+    }
     paint();
   });
   cv.addEventListener('pointerup',()=>down=false);
@@ -1056,6 +1107,18 @@ toggle('#tgDots',v=>{S.dots=v;soft();});
 
 chips('#ratioChips',c=>{S.W=+c.dataset.w;S.H=+c.dataset.h;rebuild();});
 chips('#styleChips',c=>{S.bubbleStyle=c.dataset.v;paint();});
+chips('#flowChips',c=>{S.flow=c.dataset.v;applyFlow();paint();});
+
+const FLOW_HINT={
+  slots:'Each speaker keeps one spot. A new line replaces that speaker\u2019s last one — the other bubble stays put.',
+  solo:'One bubble at a time. It clears before the next arrives.',
+  thread:'Messages stack and scroll upward, like a chat log. Best on open sky.'
+};
+function applyFlow(){
+  $('#flowHint').textContent = FLOW_HINT[S.flow];
+  $$('.slotOnly').forEach(n=>n.hidden = S.flow==='thread');
+  $$('.threadOnly').forEach(n=>n.hidden = S.flow!=='thread');
+}
 chips('#revChips',c=>{S.reveal=c.dataset.v;soft();});
 
 $('#fontSel').onchange=e=>{S.font=e.target.value;soft();};
@@ -1065,13 +1128,15 @@ $('#colR').oninput=e=>{S.colR=e.target.value;paint();};
 slider('#fsz','#fszV',v=>{S.fsz=v;soft();},v=>v);
 slider('#bw','#bwV',v=>{S.bwPct=v;soft();},v=>v+'%');
 slider('#anchor','#anchorV',v=>{S.anchorPct=v;paint();},v=>v+'%');
+slider('#anchorL','#anchorLV',v=>{S.anchorL=v;paint();},v=>v+'%');
+slider('#anchorR','#anchorRV',v=>{S.anchorR=v;paint();},v=>v+'%');
 slider('#scrim','#scrimV',v=>{S.scrim=v;paint();},v=>v+'%');
 slider('#drift','#driftV',v=>{S.drift=v;paint();},v=>v+'%');
 slider('#pace','#paceV',v=>{S.pace=v/100;soft();},v=>(v/100).toFixed(2)+'×');
 slider('#read','#readV',v=>{S.readMs=v;soft();},v=>v+'ms');
 slider('#gap','#gapV',v=>{S.gapS=v/100;soft();},v=>(v/100).toFixed(2)+'s');
 slider('#hold','#holdV',v=>{S.endHold=v/10;soft();},v=>(v/10).toFixed(1)+'s');
-slider('#keep','#keepV',v=>{S.keep=v>=9?999:v;soft();},v=>v>=9?'no limit':v);
+slider('#keep','#keepV',v=>{S.keep=v;soft();},v=>v>=9?'all':v);
 slider('#fps','#fpsV',v=>{S.fps=v;},v=>v);
 slider('#brate','#brateV',v=>{S.mbps=v;},v=>v+' Mbps');
 
@@ -1112,8 +1177,8 @@ async function loadAudio(file){
 /* ---------- project file ---------- */
 $('#saveProj').onclick=()=>{
   const keys=['W','H','raw','nameL','nameR','showNames','bubbleStyle','font','colL','colR',
-    'fsz','bwPct','anchorPct','scrim','drift','safe','tails','reveal','dots','pace','readMs',
-    'gapS','endHold','keep','fps','mbps'];
+    'fsz','bwPct','anchorPct','anchorL','anchorR','flow','scrim','drift','safe','tails',
+    'reveal','dots','pace','readMs','gapS','endHold','keep','fps','mbps'];
   const o={}; keys.forEach(k=>o[k]=S[k]);
   o.extras = S.msgs.map(m=>({extra:m.extra,pause:m.pause}));
   const blob=new Blob([JSON.stringify(o,null,2)],{type:'application/json'});
@@ -1142,13 +1207,15 @@ function syncUIFromState(){
   set('#fsz',S.fsz,'#fszV',S.fsz);
   set('#bw',S.bwPct,'#bwV',S.bwPct+'%');
   set('#anchor',S.anchorPct,'#anchorV',Math.round(S.anchorPct)+'%');
+  set('#anchorL',S.anchorL,'#anchorLV',Math.round(S.anchorL)+'%');
+  set('#anchorR',S.anchorR,'#anchorRV',Math.round(S.anchorR)+'%');
   set('#scrim',S.scrim,'#scrimV',S.scrim+'%');
   set('#drift',S.drift,'#driftV',S.drift+'%');
   set('#pace',S.pace*100,'#paceV',S.pace.toFixed(2)+'×');
   set('#read',S.readMs,'#readV',S.readMs+'ms');
   set('#gap',S.gapS*100,'#gapV',S.gapS.toFixed(2)+'s');
   set('#hold',S.endHold*10,'#holdV',S.endHold.toFixed(1)+'s');
-  set('#keep',S.keep>=999?9:S.keep,'#keepV',S.keep>=999?'no limit':S.keep);
+  set('#keep',S.keep,'#keepV',S.keep>=9?'all':S.keep);
   set('#fps',S.fps,'#fpsV',S.fps);
   set('#brate',S.mbps,'#brateV',S.mbps+' Mbps');
   $('#tgNames').setAttribute('aria-pressed',S.showNames);
@@ -1158,6 +1225,8 @@ function syncUIFromState(){
   $$('#ratioChips .chip').forEach(c=>c.setAttribute('aria-pressed',+c.dataset.w===S.W&&+c.dataset.h===S.H));
   $$('#styleChips .chip').forEach(c=>c.setAttribute('aria-pressed',c.dataset.v===S.bubbleStyle));
   $$('#revChips .chip').forEach(c=>c.setAttribute('aria-pressed',c.dataset.v===S.reveal));
+  $$('#flowChips .chip').forEach(c=>c.setAttribute('aria-pressed',c.dataset.v===S.flow));
+  applyFlow();
 }
 
 /* ---------- toast ---------- */
@@ -1170,8 +1239,8 @@ function toast(msg){
 /* ============================================================
    RENDER TO MP4
    ============================================================ */
-let cancelRender=false, renderActive=false;
-$('#veilCancel').onclick=()=>{ if(renderActive) cancelRender=true; else veilOff(); };
+let cancelRender=false;
+$('#veilCancel').onclick=()=>{ cancelRender=true; };
 
 const veil=(title,sub,pct)=>{
   $('#veil').classList.add('on');
@@ -1182,9 +1251,8 @@ const veil=(title,sub,pct)=>{
 const veilOff=()=>$('#veil').classList.remove('on');
 
 async function loadMuxer(){
-  const urls=['https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.mjs',
-              'https://unpkg.com/mp4-muxer@5.2.2/build/mp4-muxer.mjs',
-              'https://esm.sh/mp4-muxer@5.2.2'];
+  const urls=['https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.5/+esm',
+              'https://unpkg.com/mp4-muxer@5.1.5/build/mp4-muxer.mjs'];
   let last;
   for(const u of urls){ try{ return await import(/* @vite-ignore */ u); }catch(e){ last=e; } }
   throw new Error('Could not load the MP4 muxer. Check your connection and try again.');
@@ -1211,8 +1279,7 @@ async function doRender(){
     return;
   }
   pause();
-  const resumeAt=S.t;
-  cancelRender=false; renderActive=true;
+  cancelRender=false;
   $('#veilCancel').textContent='Cancel';
   veil('Rendering','preparing…',0);
 
@@ -1321,7 +1388,6 @@ async function doRender(){
     $('#veilBar').style.width='100%';
     $('#veilCancel').textContent='Close';
     let dl=document.getElementById('dlBtn');
-    if(dl && dl.href) URL.revokeObjectURL(dl.href);
     if(!dl){
       dl=document.createElement('a'); dl.id='dlBtn'; dl.className='btn hero wide';
       dl.style.marginBottom='10px';
@@ -1339,9 +1405,7 @@ async function doRender(){
     $('#veilCancel').textContent='Close';
     const dl=document.getElementById('dlBtn'); if(dl) dl.style.display='none';
   }finally{
-    renderActive=false;
-    $('#veilCancel').textContent='Close';
-    S.t=resumeAt; paint();
+    $('#veilCancel').onclick=()=>{ cancelRender=true; veilOff(); $('#veilCancel').onclick=()=>{cancelRender=true;}; };
   }
 }
 
