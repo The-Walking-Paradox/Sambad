@@ -180,6 +180,8 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
 .toggle[aria-pressed="true"] .sw{background:rgba(79,179,200,.32)}
 .toggle[aria-pressed="true"] .sw::after{transform:translateX(17px);background:var(--glacier)}
 
+.vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap;border:0;padding:0;margin:-1px}
 .hint{font-size:11.5px;color:var(--ash);line-height:1.6;margin:7px 0 0}
 .promptbox{
   border:1px solid var(--mist);border-radius:var(--r);padding:13px;
@@ -327,8 +329,8 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
     <div class="panel" data-p="scene">
       <div class="field">
         <span class="lab">Background</span>
-        <div class="drop" id="bgDrop"><b>Drop an image</b>or tap to choose · JPG / PNG / WebP</div>
-        <input type="file" id="bgFile" accept="image/*" hidden>
+        <div class="drop" id="bgDrop"><b>Drop an image</b>or tap to choose · JPG / PNG / WebP / HEIC</div>
+        <input type="file" id="bgFile" accept="image/*,.heic,.heif" class="vh">
         <div class="row" style="margin-top:9px">
           <button class="btn" id="bgClear">Clear</button>
           <button class="btn" id="bgSample">Use gradient</button>
@@ -406,6 +408,25 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
         <label class="lab" for="drift">Slow zoom <span class="val" id="driftV">4%</span></label>
         <input type="range" id="drift" min="0" max="14" value="4">
       </div>
+      <div class="field" style="border-top:1px solid var(--mist);padding-top:16px">
+        <label class="lab" for="markText">Signature</label>
+        <input type="text" id="markText" value="~ The Walking Paradox ~" spellcheck="false">
+        <div class="chips" id="markAlign" style="margin-top:9px">
+          <button class="chip" data-v="left" aria-pressed="false">Left</button>
+          <button class="chip" data-v="center" aria-pressed="true">Center</button>
+          <button class="chip" data-v="right" aria-pressed="false">Right</button>
+        </div>
+        <label class="lab" for="markY" style="margin-top:12px">Height <span class="val" id="markYV">80%</span></label>
+        <input type="range" id="markY" min="4" max="96" value="80">
+        <label class="lab" for="markSize" style="margin-top:8px">Size <span class="val" id="markSizeV">22</span></label>
+        <input type="range" id="markSize" min="12" max="46" value="22">
+        <label class="lab" for="markOp" style="margin-top:8px">Opacity <span class="val" id="markOpV">62%</span></label>
+        <input type="range" id="markOp" min="10" max="100" value="62">
+        <div class="toggle" id="tgGhost" aria-pressed="false" role="button" tabindex="0">
+          <span>Ghost mark across the middle</span><i class="sw"></i>
+        </div>
+        <p class="hint">The signature sits low, where a crop that removes it also removes part of the frame. The ghost mark is a faint second copy near the center — barely visible, but it survives cropping.</p>
+      </div>
       <div class="toggle" id="tgSafe" aria-pressed="true" role="button" tabindex="0">
         <span>Safe-zone guides (preview only)</span><i class="sw"></i>
       </div>
@@ -455,7 +476,7 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
       <div class="field">
         <span class="lab">Audio (optional)</span>
         <div class="drop" id="auDrop"><b>Drop a track</b>MP3 / M4A / WAV · trimmed to video length</div>
-        <input type="file" id="auFile" accept="audio/*" hidden>
+        <input type="file" id="auFile" accept="audio/*" class="vh">
         <p class="hint" id="auName">No track loaded.</p>
       </div>
       <div class="field">
@@ -474,7 +495,7 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
           <button class="btn" id="saveProj">Save .json</button>
           <button class="btn" id="loadProj">Load .json</button>
         </div>
-        <input type="file" id="projFile" accept=".json,application/json" hidden>
+        <input type="file" id="projFile" accept=".json,application/json" class="vh">
         <p class="hint">The background image is not stored in the project file — reload it after opening.</p>
       </div>
     </div>
@@ -531,6 +552,8 @@ const S = {
   colL:'#2A2A2E', colR:'#2C4A76',
   fsz:40, bwPct:62, anchorPct:76, anchorL:16, anchorR:70, flow:'slots', scrim:30, drift:4,
   safe:true, tails:false,
+  markText:'~ The Walking Paradox ~', markAlign:'center', markY:80,
+  markSize:22, markOp:62, ghost:false,
   reveal:'type', dots:true,
   pace:1, readMs:42, gapS:.28, endHold:1.5, keep:9,
   fps:30, mbps:10,
@@ -874,6 +897,56 @@ function drawText(ctx,it){
   ctx.restore();
 }
 
+/* letter-spaced text, drawn manually so it works in every browser */
+function spacedWidth(ctx,txt,sp){
+  const g=graphemes(txt);
+  let w=0; for(const c of g) w+=ctx.measureText(c).width+sp;
+  return w-sp;
+}
+function spacedText(ctx,txt,x,y,sp){
+  let cx=x;
+  for(const c of graphemes(txt)){ ctx.fillText(c,cx,y); cx+=ctx.measureText(c).width+sp; }
+}
+
+function drawMark(ctx){
+  const txt=(S.markText||'').trim();
+  if(!txt) return;
+  const px=Math.round(S.W*(S.markSize/1000));
+  const sp=px*0.16;
+  const margin=Math.round(S.W*0.06);
+
+  ctx.save();
+  ctx.textBaseline='middle';
+  ctx.font=`500 ${px}px ${S.font}`;
+
+  // faint crop-resistant copy near the centre
+  if(S.ghost){
+    ctx.save();
+    const gpx=Math.round(S.W*0.058), gsp=gpx*0.34;
+    ctx.font=`700 ${gpx}px ${S.font}`;
+    ctx.globalAlpha=0.055*(S.markOp/100)+0.02;
+    ctx.fillStyle='#FFFFFF';
+    ctx.translate(S.W/2,S.H*0.5);
+    ctx.rotate(-11*Math.PI/180);
+    const gw=spacedWidth(ctx,txt,gsp);
+    spacedText(ctx,txt,-gw/2,0,gsp);
+    ctx.restore();
+  }
+
+  const w=spacedWidth(ctx,txt,sp);
+  const y=S.H*(S.markY/100);
+  let x = S.markAlign==='left' ? margin
+        : S.markAlign==='right' ? S.W-margin-w
+        : (S.W-w)/2;
+
+  ctx.globalAlpha=S.markOp/100;
+  ctx.shadowColor='rgba(0,0,0,.75)';
+  ctx.shadowBlur=px*0.9; ctx.shadowOffsetY=px*0.08;
+  ctx.fillStyle='#FFFFFF';
+  spacedText(ctx,txt,x,y,sp);
+  ctx.restore();
+}
+
 function drawSafe(ctx){
   const top=S.H*0.10, bot=S.H*0.75;
   ctx.save();
@@ -909,6 +982,7 @@ function renderFrame(ctx,t,{guides=false}={}){
     drawText(ctx,it);
     ctx.restore();
   }
+  drawMark(ctx);
   if(guides && S.safe) drawSafe(ctx);
   ctx.restore();
 }
@@ -1127,10 +1201,13 @@ toggle('#tgNames',v=>{S.showNames=v;soft();});
 toggle('#tgSafe',v=>{S.safe=v;paint();});
 toggle('#tgTail',v=>{S.tails=v;paint();});
 toggle('#tgDots',v=>{S.dots=v;soft();});
+toggle('#tgGhost',v=>{S.ghost=v;paint();});
+$('#markText').oninput=e=>{S.markText=e.target.value;paint();};
 
 chips('#ratioChips',c=>{S.W=+c.dataset.w;S.H=+c.dataset.h;rebuild();});
 chips('#styleChips',c=>{S.bubbleStyle=c.dataset.v;paint();});
 chips('#flowChips',c=>{S.flow=c.dataset.v;applyFlow();paint();});
+chips('#markAlign',c=>{S.markAlign=c.dataset.v;paint();});
 
 const FLOW_HINT={
   slots:'Each speaker keeps one spot. A new line replaces that speaker\u2019s last one — the other bubble stays put.',
@@ -1155,6 +1232,9 @@ slider('#anchorL','#anchorLV',v=>{S.anchorL=v;paint();},v=>v+'%');
 slider('#anchorR','#anchorRV',v=>{S.anchorR=v;paint();},v=>v+'%');
 slider('#scrim','#scrimV',v=>{S.scrim=v;paint();},v=>v+'%');
 slider('#drift','#driftV',v=>{S.drift=v;paint();},v=>v+'%');
+slider('#markY','#markYV',v=>{S.markY=v;paint();},v=>v+'%');
+slider('#markSize','#markSizeV',v=>{S.markSize=v;paint();},v=>v);
+slider('#markOp','#markOpV',v=>{S.markOp=v;paint();},v=>v+'%');
 slider('#pace','#paceV',v=>{S.pace=v/100;soft();},v=>(v/100).toFixed(2)+'×');
 slider('#read','#readV',v=>{S.readMs=v;soft();},v=>v+'ms');
 slider('#gap','#gapV',v=>{S.gapS=v/100;soft();},v=>(v/100).toFixed(2)+'s');
@@ -1176,13 +1256,29 @@ wireDrop('#bgDrop','#bgFile',loadBG);
 function loadBG(file){
   if(S.bgURL) URL.revokeObjectURL(S.bgURL);
   S.bgURL=URL.createObjectURL(file);
+  const heic=/\.hei[cf]$/i.test(file.name||'') || /hei[cf]/i.test(file.type||'');
   const img=new Image();
-  img.onload=()=>{ S.bg=img; $('#bgDrop').innerHTML=`<b>${escapeHTML(file.name)}</b>${img.width}×${img.height} · tap to replace`; paint(); };
-  img.onerror=()=>toast('That image would not load.');
+  img.onload=()=>{
+    if(!img.width||!img.height){ img.onerror(); return; }
+    S.bg=img;
+    $('#bgDrop').innerHTML=`<b>${escapeHTML(file.name)}</b>${img.width}×${img.height} · tap to replace`;
+    paint();
+  };
+  img.onerror=()=>{
+    S.bg=null;
+    if(heic){
+      $('#bgDrop').innerHTML='<b>HEIC not supported here</b>tap to choose a JPG or PNG instead';
+      toast('This browser cannot open HEIC. On iPhone: Settings › Camera › Formats › Most Compatible, or share the photo as JPEG.');
+    }else{
+      $('#bgDrop').innerHTML='<b>That image would not open</b>tap to try another';
+      toast('The file could not be decoded. Try a JPG or PNG.');
+    }
+    paint();
+  };
   img.src=S.bgURL;
 }
-$('#bgClear').onclick=()=>{ S.bg=null; $('#bgDrop').innerHTML='<b>Drop an image</b>or tap to choose · JPG / PNG / WebP'; paint(); };
-$('#bgSample').onclick=()=>{ S.bg=null; $('#bgDrop').innerHTML='<b>Drop an image</b>or tap to choose · JPG / PNG / WebP'; paint(); toast('Using the built-in gradient.'); };
+$('#bgClear').onclick=()=>{ S.bg=null; $('#bgDrop').innerHTML='<b>Drop an image</b>or tap to choose · JPG / PNG / WebP / HEIC'; paint(); };
+$('#bgSample').onclick=()=>{ S.bg=null; $('#bgDrop').innerHTML='<b>Drop an image</b>or tap to choose · JPG / PNG / WebP / HEIC'; paint(); toast('Using the built-in gradient.'); };
 
 wireDrop('#auDrop','#auFile',loadAudio);
 async function loadAudio(file){
@@ -1201,7 +1297,8 @@ async function loadAudio(file){
 $('#saveProj').onclick=()=>{
   const keys=['W','H','raw','nameL','nameR','showNames','bubbleStyle','font','colL','colR',
     'fsz','bwPct','anchorPct','anchorL','anchorR','flow','scrim','drift','safe','tails',
-    'reveal','dots','pace','readMs','gapS','endHold','keep','fps','mbps'];
+    'reveal','dots','pace','readMs','gapS','endHold','keep','fps','mbps',
+    'markText','markAlign','markY','markSize','markOp','ghost'];
   const o={}; keys.forEach(k=>o[k]=S[k]);
   o.extras = S.msgs.map(m=>({extra:m.extra,pause:m.pause}));
   const blob=new Blob([JSON.stringify(o,null,2)],{type:'application/json'});
@@ -1234,6 +1331,10 @@ function syncUIFromState(){
   set('#anchorR',S.anchorR,'#anchorRV',Math.round(S.anchorR)+'%');
   set('#scrim',S.scrim,'#scrimV',S.scrim+'%');
   set('#drift',S.drift,'#driftV',S.drift+'%');
+  set('#markY',S.markY,'#markYV',S.markY+'%');
+  set('#markSize',S.markSize,'#markSizeV',S.markSize);
+  set('#markOp',S.markOp,'#markOpV',S.markOp+'%');
+  $('#markText').value=S.markText;
   set('#pace',S.pace*100,'#paceV',S.pace.toFixed(2)+'×');
   set('#read',S.readMs,'#readV',S.readMs+'ms');
   set('#gap',S.gapS*100,'#gapV',S.gapS.toFixed(2)+'s');
@@ -1249,6 +1350,8 @@ function syncUIFromState(){
   $$('#styleChips .chip').forEach(c=>c.setAttribute('aria-pressed',c.dataset.v===S.bubbleStyle));
   $$('#revChips .chip').forEach(c=>c.setAttribute('aria-pressed',c.dataset.v===S.reveal));
   $$('#flowChips .chip').forEach(c=>c.setAttribute('aria-pressed',c.dataset.v===S.flow));
+  $$('#markAlign .chip').forEach(c=>c.setAttribute('aria-pressed',c.dataset.v===S.markAlign));
+  $('#tgGhost').setAttribute('aria-pressed',S.ghost);
   applyFlow();
 }
 
@@ -1685,3 +1788,4 @@ async function doRender(){
 </script>
 </body>
 </html>
+
