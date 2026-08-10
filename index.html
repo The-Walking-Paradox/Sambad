@@ -381,10 +381,10 @@ input[type=color]{width:100%;height:36px;padding:2px;background:var(--ink);
       </div>
       <div class="field">
         <label class="lab" for="insetL">Left bubble — distance from edge <span class="val" id="insetLV">6%</span></label>
-        <input type="range" id="insetL" min="4" max="46" value="6">
+        <input type="range" id="insetL" min="0" max="90" value="6">
         <label class="lab" for="insetR" style="margin-top:12px">Right bubble — distance from edge <span class="val" id="insetRV">6%</span></label>
-        <input type="range" id="insetR" min="4" max="46" value="6">
-        <p class="hint">Pull a bubble in from the edge to clear platform UI — like/comment/bookmark icons — that TikTok and Instagram draw over the frame. Drag sideways on the preview to do the same thing by hand.</p>
+        <input type="range" id="insetR" min="0" max="90" value="6">
+        <p class="hint">Distance from that bubble's own edge. Pull it in to clear platform UI — the like and comment icons TikTok and Instagram draw over the frame. Easier still: just drag the bubble on the preview, in any direction.</p>
       </div>
       <div class="field">
         <span class="lab">Flow</span>
@@ -565,7 +565,7 @@ const S = {
   pace:1, readMs:42, gapS:.28, endHold:1.5, keep:9,
   fps:30, mbps:10,
   audioBuf:null, audioName:'',
-  t:0, playing:false, total:0
+  t:0, playing:false, total:0, grab:null
 };
 
 /* ---------- script parsing ---------- */
@@ -754,7 +754,10 @@ function layout(t){
     }
   }
 
-  for(const it of items) it.x = it.m.side==='L' ? marginL : S.W - marginR - it.w;
+  for(const it of items){
+    const raw = it.m.side==='L' ? marginL : S.W - marginR - it.w;
+    it.x = clamp(raw, 0, Math.max(0, S.W - it.w));   // always fully on screen
+  }
   return items.filter(it=>it.a>0.002);
 }
 
@@ -955,6 +958,37 @@ function drawMark(ctx){
   ctx.restore();
 }
 
+/* which bubble is under this point? newest wins, since it sits on top */
+function bubbleAt(px,py,t){
+  const items=layout(t);
+  const pad=S.fsz*0.5;                       // forgiving grab area for fingers
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i];
+    if(px>=it.x-pad && px<=it.x+it.w+pad && py>=it.top-pad && py<=it.bottom+pad) return it;
+  }
+  return null;
+}
+
+/* the most recently shown bubble for a given side, so a miss still grabs something sensible */
+function lastBubbleForSide(side,t){
+  const items=layout(t).filter(i=>i.m.side===side);
+  return items.length?items[items.length-1]:null;
+}
+
+function drawGrabRing(ctx){
+  if(!S.grab) return;
+  const it=S.grab.item;
+  if(!it) return;
+  const r=Math.round(S.fsz*0.72), pad=S.fsz*0.28;
+  ctx.save();
+  ctx.strokeStyle='rgba(79,179,200,.95)';
+  ctx.lineWidth=Math.max(3,S.fsz*0.09);
+  ctx.setLineDash([S.fsz*0.5,S.fsz*0.36]);
+  rr(ctx,it.x-pad,it.top-pad,it.w+pad*2,it.h+pad*2,r+pad);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawSafe(ctx){
   const top=S.H*0.10, bot=S.H*0.75;
   ctx.save();
@@ -992,6 +1026,7 @@ function renderFrame(ctx,t,{guides=false}={}){
   }
   drawMark(ctx);
   if(guides && S.safe) drawSafe(ctx);
+  if(guides) drawGrabRing(ctx);
   ctx.restore();
 }
 
@@ -1150,42 +1185,90 @@ document.addEventListener('keydown',e=>{
   rib.addEventListener('pointercancel',()=>down=false);
 })();
 
-/* ---------- drag a bubble on the preview ---------- */
+/* ---------- grab and drag a bubble on the preview ---------- */
 (function(){
-  let down=false, sx=0, sy=0, axis=null, side=null;
+  let dragging=false, offX=0, offY=0, side=null, moved=false;
+
+  // client coords -> canvas coords (S.W x S.H space)
+  const toCanvas=e=>{
+    const r=cv.getBoundingClientRect();
+    return { x:((e.clientX-r.left)/r.width)*S.W, y:((e.clientY-r.top)/r.height)*S.H };
+  };
+
+  const setSlider=(id,vid,v)=>{ $(id).value=Math.round(v); $(vid).textContent=Math.round(v)+'%'; };
+
   cv.addEventListener('pointerdown',e=>{
-    down=true; axis=null; sx=e.clientX; sy=e.clientY;
-    cv.setPointerCapture(e.pointerId);
-    const r=cv.getBoundingClientRect();
-    side = ((e.clientX-r.left)/r.width) < 0.5 ? 'L' : 'R';
-  });
-  cv.addEventListener('pointermove',e=>{
-    if(!down) return;
-    const r=cv.getBoundingClientRect();
-    if(!axis){
-      const dx=Math.abs(e.clientX-sx), dy=Math.abs(e.clientY-sy);
-      if(dx<6 && dy<6) return;               // ignore tiny jitter before committing to a direction
-      axis = dx>dy ? 'x' : 'y';
-    }
-    if(axis==='y'){
-      const yPct=((e.clientY-r.top)/r.height)*100;
-      if(S.flow==='thread'){
-        const v=clamp(yPct,30,95);
-        S.anchorPct=v; $('#anchor').value=Math.round(v); $('#anchorV').textContent=Math.round(v)+'%';
-      }else{
-        const v=clamp(yPct,4,96);
-        if(side==='L'){ S.anchorL=v; $('#anchorL').value=Math.round(v); $('#anchorLV').textContent=Math.round(v)+'%'; }
-        else{ S.anchorR=v; $('#anchorR').value=Math.round(v); $('#anchorRV').textContent=Math.round(v)+'%'; }
-      }
+    const p=toCanvas(e);
+    let it=bubbleAt(p.x,p.y,S.t);
+    if(!it){
+      // missed a bubble: fall back to whichever side was tapped, so a tap always grabs something
+      side = p.x < S.W/2 ? 'L' : 'R';
+      it = lastBubbleForSide(side,S.t);
+      if(!it) return;
+      // centre the bubble under the finger when it wasn't directly hit
+      offX = it.w/2; offY = it.h/2;
     }else{
-      const xPct=((e.clientX-r.left)/r.width)*100;
-      if(side==='L'){ const ins=clamp(xPct,4,46); S.insetL=ins; $('#insetL').value=Math.round(ins); $('#insetLV').textContent=Math.round(ins)+'%'; }
-      else{ const ins=clamp(100-xPct,4,46); S.insetR=ins; $('#insetR').value=Math.round(ins); $('#insetRV').textContent=Math.round(ins)+'%'; }
+      side = it.m.side;
+      offX = p.x-it.x; offY = p.y-it.top;
     }
+    dragging=true; moved=false;
+    S.grab={side,item:it};
+    cv.setPointerCapture(e.pointerId);
+    cv.style.cursor='grabbing';
     paint();
   });
-  cv.addEventListener('pointerup',()=>{down=false;axis=null;});
-  cv.addEventListener('pointercancel',()=>{down=false;axis=null;});
+
+  cv.addEventListener('pointermove',e=>{
+    if(!dragging){
+      // hover feedback on desktop
+      const p=toCanvas(e);
+      cv.style.cursor = bubbleAt(p.x,p.y,S.t) ? 'grab' : 'default';
+      return;
+    }
+    moved=true;
+    const p=toCanvas(e);
+    const it=S.grab.item;
+    const newX=p.x-offX, newTop=p.y-offY;
+
+    if(S.flow==='thread'){
+      // thread stacks from a single anchor, so only the bottom is meaningful
+      const v=clamp(((newTop+it.h)/S.H)*100,30,95);
+      S.anchorPct=v; setSlider('#anchor','#anchorV',v);
+    }else{
+      // vertical: store bottom if the bubble sits low (grows up), top if it sits high
+      const centrePct=((newTop+it.h/2)/S.H)*100;
+      const growUp=centrePct>50;
+      const raw=growUp ? ((newTop+it.h)/S.H)*100 : (newTop/S.H)*100;
+      const v=clamp(raw,4,96);
+      if(side==='L'){ S.anchorL=v; setSlider('#anchorL','#anchorLV',v); }
+      else{ S.anchorR=v; setSlider('#anchorR','#anchorRV',v); }
+    }
+
+    // horizontal: clamp the position so the bubble stays on screen, then derive the inset
+    const clampedX=clamp(newX,0,Math.max(0,S.W-it.w));
+    if(side==='L'){
+      const ins=(clampedX/S.W)*100;
+      S.insetL=ins; setSlider('#insetL','#insetLV',ins);
+    }else{
+      const ins=((S.W-(clampedX+it.w))/S.W)*100;
+      S.insetR=ins; setSlider('#insetR','#insetRV',ins);
+    }
+
+    // keep the ring on the bubble as it moves
+    const fresh=layout(S.t).filter(i=>i.m.side===side);
+    if(fresh.length) S.grab.item=fresh[fresh.length-1];
+    paint();
+  });
+
+  const release=()=>{
+    if(!dragging) return;
+    dragging=false; S.grab=null;
+    cv.style.cursor='default';
+    paint();
+  };
+  cv.addEventListener('pointerup',release);
+  cv.addEventListener('pointercancel',release);
+  cv.addEventListener('pointerleave',()=>{ if(!dragging) cv.style.cursor='default'; });
 })();
 
 /* ---------- tabs ---------- */
